@@ -49,7 +49,7 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 
 
 class LightningGPTModule(L.LightningModule):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, micro_batch_size) -> None:
         super().__init__()
         self.config = config
         self.module: Optional[torch.nn.Module] = None
@@ -176,7 +176,7 @@ def main(
         config = Config.from_name(model_name)
         trainer.print(f"Loading model with {config.__dict__}")
         t0 = time.perf_counter()
-        model = LightningGPTModule(config)
+        model = LightningGPTModule(config, micro_batch_size)
         trainer.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
 
         train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
