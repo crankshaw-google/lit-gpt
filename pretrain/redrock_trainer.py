@@ -124,6 +124,9 @@ def main(
     with torch.autograd.profiler.emit_nvtx():
         precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
+        out_dir = Path(out_dir)
+        data_dir = Path(data_dir)
+
         gradient_accumulation_steps = batch_size // micro_batch_size
         assert gradient_accumulation_steps > 0
         if devices > 1:
