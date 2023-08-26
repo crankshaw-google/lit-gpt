@@ -44,3 +44,5 @@ RUN MAX_JOBS=4 pip install 'flash-attn>=2.0.0.post1' --no-build-isolation \
 RUN python -c "from lit_gpt.model import GPT, Block, Config" && \
   python -c "import lightning as L" && \
   python -c "from lightning.fabric.strategies import FSDPStrategy"
+
+
