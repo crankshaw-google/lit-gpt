@@ -54,6 +54,7 @@ class LightningGPTModule(L.LightningModule):
         self.config = config
         self.module: Optional[torch.nn.Module] = None
         self.measured_flops: Optional[int] = None
+        self.nsys_profile_step_multiple = 5
 
     def configure_model(self) -> None:
         self.module = GPT(self.config)
@@ -85,6 +86,14 @@ class LightningGPTModule(L.LightningModule):
         for optimizer in self.trainer.strategy.optimizers:
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
+
+        if batch_idx > 0 and batch_idx % self.nsys_profile_step_multiple == 0:
+            torch.cuda.cudart().cudaProfilerStart()
+
+
+    def on_train_batch_end(self, outputs, batch: Any, batch_idx: int, unused: int = 0) -> None:
+        if batch_idx > 0 and batch_idx % self.nsys_profile_step_multiple == 0:
+            torch.cuda.cudart().cudaProfilerStop()
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         input_ids, targets = batch
