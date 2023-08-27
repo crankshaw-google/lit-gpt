@@ -17,6 +17,7 @@ from torch.distributed.fsdp import ShardingStrategy
 import torch.multiprocessing as mp
 import torch.profiler as tprofiler
 from torch.utils.data import DataLoader, IterableDataset
+import nvtx
 
 
 # support running without installing as a package
@@ -74,6 +75,7 @@ class LightningGPTModule(L.LightningModule):
     self.micro_batch_size = micro_batch_size
     self.prof = prof
     self.gradient_accumulation_steps = gradient_accumulation_steps
+    self.backward_nvtx_range = None
 
   def configure_model(self) -> None:
     self.module = GPT(self.config)
@@ -96,14 +98,14 @@ class LightningGPTModule(L.LightningModule):
       # When comparing MFU or FLOP numbers with other projects that use estimated FLOPs,
       # consider setting `self.measured_flops = estimated_flops` instead
       estimated_flops = estimate_flops(meta_model) * self.micro_batch_size
-      self.print(
+      print(
           f"Estimated TFLOPs: {estimated_flops * trainer.world_size / 1e12:.2f}"
       )
       x = torch.randint(
           0, 1, (self.micro_batch_size, meta_model.config.block_size)
       )
       self.measured_flops = measure_flops(meta_model, x)
-      self.print(
+      print(
           "Measured TFLOPs:"
           f" {self.measured_flops * trainer.world_size / 1e12:.2f}"
       )
@@ -147,12 +149,26 @@ class LightningGPTModule(L.LightningModule):
       sys.stdout.flush()
       sys.stderr.flush()
 
+  @nvtx.annotate(color='green')
   def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
     input_ids, targets = batch
+    # TODO: I think this is the forward pass
     logits = self.module(input_ids)
+    # TODO: I think this is the backwards pass
     loss = chunked_cross_entropy(logits, targets, chunk_size=0)
     self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
     return loss
+
+  def on_before_backward(self, loss):
+    self.backward_nvtx_range = nvtx.start_range(message="backward", color="red")
+
+  def on_after_backward(self):
+    if self.backward_nvtx_range:
+      nvtx.end_range(self.backward_nvtx_range)
+
+  @nvtx.annotate(color='orange')
+  def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
+    optimizer.step(closure=optimizer_closure)
 
   def validation_step(self, batch: Any, batch_idx: int) -> None:
     input_ids, targets = batch
