@@ -190,7 +190,7 @@ def main(
         trainer.print(f"Loading model with {config.__dict__}")
         t0 = time.perf_counter()
         with tprofiler.profile(
-            schedule=tprofiler.schedule(wait=1, active=10, repeat=3),
+            schedule=tprofiler.schedule(wait=1, warmup=1, active=10, repeat=3),
             on_trace_ready=tprofiler.tensorboard_trace_handler(out_dir / "tprofiler"),
             record_shapes=True,
             with_stack=True
