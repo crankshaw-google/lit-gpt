@@ -170,7 +170,7 @@ def main(
     pt_profiler_active: int = 2,
     pt_profiler_repeat: int = 5,
 ) -> None:
-  if use_profiler:
+  if use_pt_profiler:
     cm = nullcontext()
   else:
     cm = torch.autograd.profiler.emit_nvtx()
@@ -252,7 +252,7 @@ def main(
     config = Config.from_name(model_name)
     trainer.print(f"Loading model with {config.__dict__}")
     t0 = time.perf_counter()
-    if use_profiler:
+    if use_pt_profiler:
       prof = tprofiler.profile(
           schedule=tprofiler.schedule(
               wait=pr_profiler_wait,
