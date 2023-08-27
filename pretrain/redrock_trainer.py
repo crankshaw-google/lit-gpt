@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.profiler import PyTorchProfiler
 from lightning.pytorch.strategies import FSDPStrategy, XLAStrategy
 from torch.utils.data import DataLoader, IterableDataset
 import torch.autograd.profiler
@@ -26,11 +27,11 @@ from lit_gpt.model import GPT, Block
 from lit_gpt.speed_monitor import SpeedMonitorCallback, estimate_flops, measure_flops
 from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger
 
-mp.set_start_method('spawn', force=True)
-
-import utilities.monitor_collectives
-
-utilities.monitor_collectives.shunt_torch_communication()
+# mp.set_start_method('spawn', force=True)
+#
+# import utilities.monitor_collectives
+#
+# utilities.monitor_collectives.shunt_torch_communication()
 
 save_interval = 1000
 eval_interval = 1000
@@ -150,11 +151,12 @@ def main(
         else:
             strategy = "auto"
 
-        logger = step_csv_logger("out", name, cls=CSVLogger, flush_logs_every_n_steps=log_interval)
+        logger = step_csv_logger(str(out_dir), name, cls=CSVLogger, flush_logs_every_n_steps=log_interval)
         speed_monitor = SpeedMonitorCallback(
             length_fn=lambda batch: batch[0].size(1), batch_size=micro_batch_size, window_size=50, time_unit="seconds"
         )
         model_checkpoint = ModelCheckpoint(dirpath=out_dir, every_n_train_steps=save_interval, save_last=True, verbose=True)
+        profiler = PyTorchProfiler(dirpath=out_dir, emit_nvtx=True, export_to_chrome=True)
         trainer = L.Trainer(
             devices=devices,
             strategy=strategy,
@@ -168,6 +170,7 @@ def main(
             log_every_n_steps=log_interval,
             val_check_interval=eval_interval,
             num_nodes=num_nodes,
+            profiler=profiler,
         )
 
         L.seed_everything(1337, workers=True)  # same seed for every process to init model (FSDP)
