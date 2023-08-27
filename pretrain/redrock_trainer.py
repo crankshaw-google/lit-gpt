@@ -129,14 +129,18 @@ class LightningGPTModule(L.LightningModule):
   ) -> None:
     global_batch_idx = batch_idx / self.gradient_accumulation_steps
     global_batch_offset = batch_idx % self.gradient_accumulation_steps
-    if self.prof and batch_idx > 0 and global_batch_offset == 0:
+    is_first_microbatch = global_batch_offset == 0
+    is_last_microbatch = global_batch_offset == self.gradient_accumulation_steps - 1
+    if self.prof and is_last_microbatch:
       self.prof.step()
+
     if (
         global_batch_idx > 1
         and global_batch_idx % self.nsys_profile_step_multiple == 0
+        and is_last_microbatch
     ):
       torch.cuda.cudart().cudaProfilerStop()
-    if global_batch_offset == 0:
+    if is_last_microbatch:
       self.print(f"HEARTBEAT: {global_batch_idx=}, {batch_idx=}")
 
   def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
