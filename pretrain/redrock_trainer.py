@@ -55,7 +55,7 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 
 
 class LightningGPTModule(L.LightningModule):
-    def __init__(self, config: Config, micro_batch_size, prof: tprofiler.profile) -> None:
+    def __init__(self, config: Config, micro_batch_size, prof: Optional[tprofiler.profile]) -> None:
         super().__init__()
         self.config = config
         self.module: Optional[torch.nn.Module] = None
@@ -130,6 +130,7 @@ def main(
     num_nodes: int = 1,
     batch_size: int = 512,
     micro_batch_size: int = 4,
+    use_profiler: bool = False
 ) -> None:
     with torch.autograd.profiler.emit_nvtx():
         precision = precision or get_default_supported_precision(training=True, tpu=tpu)
@@ -162,7 +163,7 @@ def main(
             length_fn=lambda batch: batch[0].size(1), batch_size=micro_batch_size, window_size=50, time_unit="seconds"
         )
         model_checkpoint = ModelCheckpoint(dirpath=out_dir, every_n_train_steps=save_interval, save_last=True, verbose=True)
-        profiler = PyTorchProfiler(dirpath=out_dir, emit_nvtx=True, export_to_chrome=True)
+        # profiler = PyTorchProfiler(dirpath=out_dir, emit_nvtx=True, export_to_chrome=True)
         trainer = L.Trainer(
             devices=devices,
             strategy=strategy,
@@ -176,7 +177,7 @@ def main(
             log_every_n_steps=log_interval,
             val_check_interval=eval_interval,
             num_nodes=num_nodes,
-            profiler=profiler,
+            # profiler=profiler,
         )
 
         L.seed_everything(1337, workers=True)  # same seed for every process to init model (FSDP)
@@ -189,25 +190,31 @@ def main(
         config = Config.from_name(model_name)
         trainer.print(f"Loading model with {config.__dict__}")
         t0 = time.perf_counter()
-        with tprofiler.profile(
-            schedule=tprofiler.schedule(wait=1, warmup=1, active=10, repeat=3),
-            on_trace_ready=tprofiler.tensorboard_trace_handler(out_dir / "tprofiler"),
-            record_shapes=True,
-            with_stack=True
-        ) as prof:
-            model = LightningGPTModule(config, micro_batch_size, prof)
-            trainer.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
+        if use_profiler:
+          prof = tprofiler.profile(
+              schedule=tprofiler.schedule(wait=1, warmup=1, active=10, repeat=3),
+              on_trace_ready=tprofiler.tensorboard_trace_handler(out_dir / "tprofiler"),
+              record_shapes=True,
+              with_stack=True
+          )
+          prof.start()
+        else:
+          prof = None
+        model = LightningGPTModule(config, micro_batch_size, prof)
+        trainer.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
 
-            train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
-            val_data = Dataset(str(data_dir / "val.bin"), config.block_size)
-            train_dataloader = DataLoader(train_data, batch_size=micro_batch_size, num_workers=2)
-            val_dataloader = DataLoader(val_data, batch_size=micro_batch_size, num_workers=2)
+        train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
+        val_data = Dataset(str(data_dir / "val.bin"), config.block_size)
+        train_dataloader = DataLoader(train_data, batch_size=micro_batch_size, num_workers=2)
+        val_dataloader = DataLoader(val_data, batch_size=micro_batch_size, num_workers=2)
 
-            t0 = time.perf_counter()
-            trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="last")
-            trainer.print(f"Training time: {(time.perf_counter()-t0):.2f}s")
-            if trainer.strategy.root_device.type == "cuda":
-                trainer.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
+        t0 = time.perf_counter()
+        trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="last")
+        trainer.print(f"Training time: {(time.perf_counter()-t0):.2f}s")
+        if trainer.strategy.root_device.type == "cuda":
+            trainer.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
+        if prof:
+          prof.stop()
 
 
 class Dataset(IterableDataset):
