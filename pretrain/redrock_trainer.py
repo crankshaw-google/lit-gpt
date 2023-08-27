@@ -93,7 +93,7 @@ class LightningGPTModule(L.LightningModule):
 
 
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int, unused: int = 0) -> None:
-        if batch_idx > 0 and batch_idx % self.nsys_profile_step_multiple == 0:
+        if batch_idx > 2 and batch_idx % self.nsys_profile_step_multiple == 2:
             torch.cuda.cudart().cudaProfilerStop()
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
