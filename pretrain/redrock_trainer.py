@@ -99,18 +99,11 @@ class LightningGPTModule(L.LightningModule):
       self.print(
           f"Estimated TFLOPs: {estimated_flops * trainer.world_size / 1e12:.2f}"
       )
-      print(
-          f"Estimated TFLOPs: {estimated_flops * trainer.world_size / 1e12:.2f}"
-      )
       x = torch.randint(
           0, 1, (self.micro_batch_size, meta_model.config.block_size)
       )
       self.measured_flops = measure_flops(meta_model, x)
       self.print(
-          "Measured TFLOPs:"
-          f" {self.measured_flops * trainer.world_size / 1e12:.2f}"
-      )
-      print(
           "Measured TFLOPs:"
           f" {self.measured_flops * trainer.world_size / 1e12:.2f}"
       )
@@ -151,6 +144,8 @@ class LightningGPTModule(L.LightningModule):
       torch.cuda.cudart().cudaProfilerStop()
     if is_last_microbatch:
       self.print(f"HEARTBEAT: {global_batch_idx=}, {batch_idx=}")
+      sys.stdout.flush()
+      sys.stderr.flush()
 
   def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
     input_ids, targets = batch
