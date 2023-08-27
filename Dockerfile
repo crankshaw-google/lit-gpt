@@ -34,12 +34,14 @@ RUN apt-get -y update && apt-get install -y nfs-common
 
 WORKDIR /workspace/
 
-COPY . .
+COPY requirements.txt
 
 RUN MAX_JOBS=4 pip install 'flash-attn>=2.0.0.post1' --no-build-isolation \
   && pip install -r requirements.txt tokenizers sentencepiece ujson
 
 RUN pip install nvidia-dlprof-pytorch-nvtx nvidia-pyindex nvidia-dlprof
+
+COPY . .
 
 # Check install
 RUN python -c "from lit_gpt.model import GPT, Block, Config" && \
