@@ -13,6 +13,9 @@ from lightning.pytorch.strategies import FSDPStrategy, XLAStrategy
 from torch.utils.data import DataLoader, IterableDataset
 import torch.autograd.profiler
 import torch.multiprocessing as mp
+import nvidia_dlprof_pytorch_nvtx
+nvidia_dlprof_pytorch_nvtx.init()
+
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
