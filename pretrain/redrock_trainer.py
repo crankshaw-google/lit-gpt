@@ -140,7 +140,10 @@ def main(
     with cm:
         precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
-        out_dir = Path(out_dir)
+        base_out_dir = Path(out_dir)
+        logger_out_dir = base_out_dir / "csv_logger"
+        checkpoint_out_dir = base_out_dir / "checkpoints"
+        tprofiler_out_dir = base_out_dir / "tprofiler"
         data_dir = Path(data_dir)
 
         gradient_accumulation_steps = batch_size // micro_batch_size
@@ -163,11 +166,11 @@ def main(
         else:
             strategy = "auto"
 
-        logger = step_csv_logger(str(out_dir), name, cls=CSVLogger, flush_logs_every_n_steps=log_interval)
+        logger = step_csv_logger(str(logger_out_dir), name, cls=CSVLogger, flush_logs_every_n_steps=log_interval)
         speed_monitor = SpeedMonitorCallback(
             length_fn=lambda batch: batch[0].size(1), batch_size=micro_batch_size, window_size=50, time_unit="seconds"
         )
-        model_checkpoint = ModelCheckpoint(dirpath=out_dir, every_n_train_steps=save_interval, save_last=True, verbose=True)
+        model_checkpoint = ModelCheckpoint(dirpath=checkpoint_out_dir, every_n_train_steps=save_interval, save_last=True, verbose=True)
         # profiler = PyTorchProfiler(dirpath=out_dir, emit_nvtx=True, export_to_chrome=True)
         trainer = L.Trainer(
             devices=devices,
@@ -190,15 +193,17 @@ def main(
         trainer.print(hparams)
 
         if trainer.global_rank == 0:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            base_out_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_out_dir.mkdir(parents=True, exist_ok=True)
+            logger_out_dir.mkdir(parents=True, exist_ok=True)
 
         config = Config.from_name(model_name)
         trainer.print(f"Loading model with {config.__dict__}")
         t0 = time.perf_counter()
         if use_profiler:
           prof = tprofiler.profile(
-              schedule=tprofiler.schedule(wait=1, warmup=1, active=10, repeat=3),
-              on_trace_ready=tprofiler.tensorboard_trace_handler(out_dir / "tprofiler"),
+              schedule=tprofiler.schedule(wait=32, warmup=32, active=64, repeat=3),
+              on_trace_ready=tprofiler.tensorboard_trace_handler(tprofiler_out_dir),
               record_shapes=True,
               with_stack=True
           )
