@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
-from lightning.pytorch.profiler import PyTorchProfiler
+from lightning.pytorch.profilers import PyTorchProfiler
 from lightning.pytorch.strategies import FSDPStrategy, XLAStrategy
 from torch.utils.data import DataLoader, IterableDataset
 import torch.autograd.profiler
