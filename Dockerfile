@@ -34,7 +34,7 @@ RUN apt-get -y update && apt-get install -y nfs-common
 
 WORKDIR /workspace/
 
-COPY requirements.txt
+COPY requirements.txt requirements.txt
 
 RUN MAX_JOBS=4 pip install 'flash-attn>=2.0.0.post1' --no-build-isolation \
   && pip install -r requirements.txt tokenizers sentencepiece ujson
