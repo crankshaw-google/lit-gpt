@@ -30,11 +30,11 @@ from lit_gpt.model import GPT, Block
 from lit_gpt.speed_monitor import SpeedMonitorCallback, estimate_flops, measure_flops
 from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger
 
-# mp.set_start_method('spawn', force=True)
-#
-# import utilities.monitor_collectives
-#
-# utilities.monitor_collectives.shunt_torch_communication()
+mp.set_start_method('spawn', force=True)
+
+import utilities.monitor_collectives
+
+utilities.monitor_collectives.shunt_torch_communication()
 
 save_interval = 1000
 eval_interval = 1000
