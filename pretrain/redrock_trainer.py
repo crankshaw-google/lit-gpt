@@ -16,6 +16,7 @@ import torch.autograd.profiler
 import torch.multiprocessing as mp
 from torch.distributed.fsdp import ShardingStrategy
 import torch.profiler as tprofiler
+from contextlib import nullcontext
 # import nvidia_dlprof_pytorch_nvtx
 # nvidia_dlprof_pytorch_nvtx.init()
 
@@ -132,7 +133,11 @@ def main(
     micro_batch_size: int = 4,
     use_profiler: bool = False
 ) -> None:
-    with torch.autograd.profiler.emit_nvtx():
+    if use_profiler:
+      cm = nullcontext()
+    else:
+      cm = torch.autograd.profiler.emit_nvtx()
+    with cm:
         precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
         out_dir = Path(out_dir)
