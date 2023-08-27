@@ -14,6 +14,8 @@ from lightning.pytorch.strategies import FSDPStrategy, XLAStrategy
 from torch.utils.data import DataLoader, IterableDataset
 import torch.autograd.profiler
 import torch.multiprocessing as mp
+from torch.distributed.fsdp import ShardingStrategy
+import torch.profiler as tprofiler
 # import nvidia_dlprof_pytorch_nvtx
 # nvidia_dlprof_pytorch_nvtx.init()
 
@@ -53,13 +55,14 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 
 
 class LightningGPTModule(L.LightningModule):
-    def __init__(self, config: Config, micro_batch_size) -> None:
+    def __init__(self, config: Config, micro_batch_size, prof: tprofiler.profile) -> None:
         super().__init__()
         self.config = config
         self.module: Optional[torch.nn.Module] = None
         self.measured_flops: Optional[int] = None
         self.nsys_profile_step_multiple = 5
         self.micro_batch_size = micro_batch_size
+        self.prof = prof
 
     def configure_model(self) -> None:
         self.module = GPT(self.config)
@@ -97,6 +100,8 @@ class LightningGPTModule(L.LightningModule):
 
 
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int, unused: int = 0) -> None:
+        if self.prof:
+            self.prof.step()
         if batch_idx > 2 and batch_idx % self.nsys_profile_step_multiple == 2:
             torch.cuda.cudart().cudaProfilerStop()
 
@@ -147,6 +152,7 @@ def main(
                     # state_dict_type="full",
                     limit_all_gathers=True,
                     cpu_offload=False,
+                    sharding_strategy=ShardingStrategy.FULL_SHARD,
                 )
         else:
             strategy = "auto"
@@ -183,19 +189,25 @@ def main(
         config = Config.from_name(model_name)
         trainer.print(f"Loading model with {config.__dict__}")
         t0 = time.perf_counter()
-        model = LightningGPTModule(config, micro_batch_size)
-        trainer.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
+        with tprofiler.profile(
+            schedule=tprofiler.schedule(wait=1, active=10, repeat=3),
+            on_trace_ready=tprofiler.tensorboard_trace_handler(out_dir / "tprofiler"),
+            record_shapes=True,
+            with_stack=True
+        ) as prof:
+            model = LightningGPTModule(config, micro_batch_size, prof)
+            trainer.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
 
-        train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
-        val_data = Dataset(str(data_dir / "val.bin"), config.block_size)
-        train_dataloader = DataLoader(train_data, batch_size=micro_batch_size, num_workers=2)
-        val_dataloader = DataLoader(val_data, batch_size=micro_batch_size, num_workers=2)
+            train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
+            val_data = Dataset(str(data_dir / "val.bin"), config.block_size)
+            train_dataloader = DataLoader(train_data, batch_size=micro_batch_size, num_workers=2)
+            val_dataloader = DataLoader(val_data, batch_size=micro_batch_size, num_workers=2)
 
-        t0 = time.perf_counter()
-        trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="last")
-        trainer.print(f"Training time: {(time.perf_counter()-t0):.2f}s")
-        if trainer.strategy.root_device.type == "cuda":
-            trainer.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
+            t0 = time.perf_counter()
+            trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="last")
+            trainer.print(f"Training time: {(time.perf_counter()-t0):.2f}s")
+            if trainer.strategy.root_device.type == "cuda":
+                trainer.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
 
 
 class Dataset(IterableDataset):
