@@ -122,12 +122,13 @@ class LightningGPTModule(L.LightningModule):
         global_batch_idx > 0
         and global_batch_idx % self.nsys_profile_step_multiple == 0
     ):
+      self.print(f"Starting Nsys profiling")
       torch.cuda.cudart().cudaProfilerStart()
 
   def on_train_batch_end(
       self, outputs, batch: Any, batch_idx: int, unused: int = 0
   ) -> None:
-    global_batch_idx = batch_idx / self.gradient_accumulation_steps
+    global_batch_idx = batch_idx // self.gradient_accumulation_steps
     global_batch_offset = batch_idx % self.gradient_accumulation_steps
     is_first_microbatch = global_batch_offset == 0
     is_last_microbatch = global_batch_offset == self.gradient_accumulation_steps - 1
@@ -139,6 +140,7 @@ class LightningGPTModule(L.LightningModule):
         and global_batch_idx % self.nsys_profile_step_multiple == 0
         and is_last_microbatch
     ):
+      self.print(f"Stopping Nsys profiling")
       torch.cuda.cudart().cudaProfilerStop()
     if is_last_microbatch:
       self.print(f"HEARTBEAT: {global_batch_idx=}, {batch_idx=}")
