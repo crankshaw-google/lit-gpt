@@ -35,8 +35,8 @@ import utilities.monitor_collectives
 
 utilities.monitor_collectives.shunt_torch_communication()
 
-save_interval = 1000
-eval_interval = 1000
+save_interval = 10000
+eval_interval = 10000
 eval_iters = 100
 log_interval = 1
 
