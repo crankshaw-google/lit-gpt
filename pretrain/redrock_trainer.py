@@ -37,9 +37,9 @@ import utilities.monitor_collectives
 
 utilities.monitor_collectives.shunt_torch_communication()
 
-save_interval = 10000
-eval_interval = 10000
-eval_iters = 100
+save_interval = 10
+eval_interval = 100
+eval_iters = 10
 log_interval = 1
 
 # Hyperparameters
@@ -95,7 +95,7 @@ class LightningGPTModule(L.LightningModule):
     print(f'{self.trainer.global_rank} time to init weights: {(time.time()-t):.02f}s', flush=True)
     print(self.trainer.global_rank, ' out configure_model', flush=True)
     print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
-    
+
 
 
   def configure_optimizers(self) -> torch.optim.Optimizer:
@@ -284,6 +284,7 @@ def main(
         log_every_n_steps=log_interval,
         val_check_interval=eval_interval,
         num_nodes=num_nodes,
+        deterministic=True,
     )
 
     if debug:
