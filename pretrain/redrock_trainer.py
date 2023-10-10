@@ -38,7 +38,7 @@ import utilities.monitor_collectives
 
 utilities.monitor_collectives.shunt_torch_communication()
 
-save_interval = os.environ.get("SAVE_INTERVAL", 10000)
+save_interval = int(os.environ.get("SAVE_INTERVAL", 10000))
 eval_interval = 10000
 eval_iters = 100
 log_interval = 1
