@@ -96,7 +96,7 @@ class LightningGPTModule(L.LightningModule):
     print(f'{self.trainer.global_rank} time to init weights: {(time.time()-t):.02f}s', flush=True)
     print(self.trainer.global_rank, ' out configure_model', flush=True)
     print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
-    
+
 
 
   def configure_optimizers(self) -> torch.optim.Optimizer:
