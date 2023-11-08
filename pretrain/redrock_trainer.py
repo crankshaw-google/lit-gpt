@@ -389,10 +389,10 @@ def main(
     train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
     val_data = Dataset(str(data_dir / "val.bin"), config.block_size)
     train_dataloader = DataLoader(
-        train_data, batch_size=micro_batch_size, num_workers=2
+        train_data, batch_size=micro_batch_size, num_workers=0
     )
     val_dataloader = DataLoader(
-        val_data, batch_size=micro_batch_size, num_workers=2
+        val_data, batch_size=micro_batch_size, num_workers=0
     )
 
     t0 = time.perf_counter()
