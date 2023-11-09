@@ -16,7 +16,8 @@ from lit_gpt.config import Config
 RoPECache = Tuple[torch.Tensor, torch.Tensor]
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
-FlashAttention2Available = RequirementCache("flash-attn>=2.0.0.post1")
+# FlashAttention2Available = RequirementCache("flash-attn>=2.0.0.post1")
+FlashAttention2Available = False
 
 
 class GPT(nn.Module):
