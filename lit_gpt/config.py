@@ -117,6 +117,19 @@ redrock = [
     dict(name="redrock-1t-5-layers", block_size=2048, n_layer=5, n_embd=25600, n_head=160, padding_multiple=128),
     dict(name="redrock-1t", block_size=2048, n_layer=130, n_embd=25600, n_head=160, padding_multiple=128),
     dict(name="redrock-1t", block_size=2048, n_layer=130, n_embd=25600, n_head=160, padding_multiple=128),
+    # TODO:
+    # + vocab size in MPT is 50368 with EleutherAI/gpt-neox-20b tokenizer
+    # + attn_impl is triton
+    dict(
+        name="redrock-mpt-70b",
+        block_size=2048,
+        vocab_size=32000,
+        n_layer=80,
+        n_embd=8192,
+        n_head=64,
+        padding_multiple=64,
+        n_query_groups=8,
+    ),
 ]
 
 configs.extend(redrock)
