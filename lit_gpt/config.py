@@ -121,8 +121,18 @@ redrock = [
     # + vocab size in MPT is 50368 with EleutherAI/gpt-neox-20b tokenizer
     # + attn_impl is triton
     dict(
-        name="redrock-mpt-70b",
+        name="redrock-mpt-70b-2k",
         block_size=2048,
+        vocab_size=32000,
+        n_layer=80,
+        n_embd=8192,
+        n_head=64,
+        padding_multiple=64,
+        n_query_groups=8,
+    ),
+    dict(
+        name="redrock-mpt-70b-4k",
+        block_size=4096,
         vocab_size=32000,
         n_layer=80,
         n_embd=8192,
