@@ -270,6 +270,7 @@ def main(
     debug: bool = False,
     deterministic: bool = False,
     fast_init: bool = False,
+    activation_checkpointing: bool = True,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -296,7 +297,7 @@ def main(
       else:
         strategy = FSDPStrategy(
             auto_wrap_policy={Block},
-            activation_checkpointing_policy={Block},
+            activation_checkpointing_policy={Block} if activation_checkpointing else None,
             # state_dict_type="sharded",
             limit_all_gathers=True,
             cpu_offload=False,
