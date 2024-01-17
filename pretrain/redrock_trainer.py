@@ -271,6 +271,7 @@ def main(
     deterministic: bool = False,
     fast_init: bool = False,
     activation_checkpointing: bool = True,
+    fsdp_size: int = 0,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -302,6 +303,7 @@ def main(
             limit_all_gathers=True,
             cpu_offload=False,
             sharding_strategy=ShardingStrategy.FULL_SHARD,
+            fsdp_size = fsdp_size,
         )
     else:
       strategy = "auto"
