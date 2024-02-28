@@ -34,9 +34,9 @@ from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision
 
 mp.set_start_method("spawn", force=True)
 
-import utilities.monitor_collectives
-
-utilities.monitor_collectives.shunt_torch_communication()
+  # import utilities.monitor_collectives
+  #
+  # utilities.monitor_collectives.shunt_torch_communication()
 
 save_interval = int(os.environ.get("SAVE_INTERVAL", 10000))
 eval_interval = 10000
