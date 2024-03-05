@@ -1,5 +1,5 @@
 # torch>=2.1.0dev
-lightning @ git+https://github.com/Liyang90/lightning@hybrid_fsdp
+lightning @ git+https://github.com/Liyang90/lightning@hybrid_fsdp_stage
 jsonargparse[signatures]  # CLI
 
 # other optional dependencies are

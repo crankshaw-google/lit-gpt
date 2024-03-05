@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -271,7 +271,7 @@ def main(
     deterministic: bool = False,
     fast_init: bool = False,
     activation_checkpointing: bool = True,
-    fsdp_size: int = 0,
+    device_mesh: Optional[Tuple] = None,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -302,8 +302,8 @@ def main(
             # state_dict_type="sharded",
             limit_all_gathers=True,
             cpu_offload=False,
-            sharding_strategy=ShardingStrategy.FULL_SHARD,
-            fsdp_size = fsdp_size,
+            sharding_strategy=ShardingStrategy.FULL_SHARD if device_mesh is None else ShardingStrategy.HYBRID_SHARD,
+            device_mesh = device_mesh,
         )
     else:
       strategy = "auto"
