@@ -284,6 +284,7 @@ def main(
     logger_out_dir = base_out_dir / "csv_logger"
     checkpoint_out_dir = base_out_dir / "checkpoints"
     tprofiler_out_dir = base_out_dir / "tprofiler"
+    execution_trace_out_dir = base_out_dir / "execution_trace"
     data_dir = Path(data_dir)
 
     gradient_accumulation_steps = batch_size // micro_batch_size
@@ -368,6 +369,10 @@ def main(
           on_trace_ready=tprofiler.tensorboard_trace_handler(tprofiler_out_dir),
           record_shapes=True,
           with_stack=True,
+          activities=[tprofiler.ProfilerActivity.CPU, tprofiler.ProfilerActivity.CUDA],
+          execution_trace_observer=(tprofiler.ExecutionTraceObserver().register_callback(f"{execution_trace_out_dir}/execution_trace_rank_{trainer.global_rank}.json"))
+    )
+
       )
       prof.start()
     else:
