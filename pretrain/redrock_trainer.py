@@ -360,7 +360,7 @@ def main(
     if use_pt_profiler:
       prof = tprofiler.profile(
           schedule=tprofiler.schedule(
-              wait=pr_profiler_wait,
+              wait=pt_profiler_wait,
               warmup=pt_profiler_warmup,
               active=pt_profiler_active,
               repeat=pt_profiler_repeat,
