@@ -285,6 +285,8 @@ def main(
     checkpoint_out_dir = base_out_dir / "checkpoints"
     tprofiler_out_dir = base_out_dir / "tprofiler"
     execution_trace_out_dir = base_out_dir / "execution_trace"
+    Path(execution_trace_out_dir).mkdir(parents=True, exist_ok=True)
+
     data_dir = Path(data_dir)
 
     gradient_accumulation_steps = batch_size // micro_batch_size
