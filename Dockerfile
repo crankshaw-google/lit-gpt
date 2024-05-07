@@ -3,6 +3,7 @@
 # FROM nvcr.io/nvidia/pytorch:23.09-py3
 FROM nvcr.io/nvidia/pytorch:24.04-py3
 
+RUN pip install -U torch torchvision torchaudio
 
 # Ensure apt-get won't prompt for selecting options
 ENV DEBIAN_FRONTEND=noninteractive
