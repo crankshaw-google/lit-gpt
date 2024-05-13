@@ -1,21 +1,32 @@
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
 
+from contextlib import nullcontext
 import math
 import pprint
 import time
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Any
+import os
+import sys
 
 import lightning as L
 import torch
 import torch.nn as nn
+import torch.multiprocessing as mp
 from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities.throughput import ThroughputMonitor, measure_flops
+import torch.profiler as tprofiler
 from torch.utils.data import DataLoader
 from torchmetrics.aggregation import RunningMean
 from typing_extensions import Literal
+import nvtx
+# import logging
+
+# # support running without installing as a package
+# wd = Path(__file__).parent.parent.resolve()
+# sys.path.append(str(wd))
 
 from litgpt import Tokenizer
 from litgpt.args import EvalArgs, TrainArgs
@@ -38,6 +49,10 @@ from litgpt.utils import (
     save_hyperparameters,
 )
 
+mp.set_start_method("spawn", force=True)
+import utilities.monitor_collectives
+
+utilities.monitor_collectives.shunt_torch_communication()
 
 def setup(
     model_name: Optional[str] = None,
@@ -48,7 +63,7 @@ def setup(
     resume: Union[bool, Path] = False,
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
-        save_interval=1000,
+        save_interval = int(os.environ.get("SAVE_INTERVAL", 10000))
         log_interval=1,
         global_batch_size=512,
         micro_batch_size=4,
@@ -61,12 +76,15 @@ def setup(
         min_lr=4e-5,
         lr_warmup_steps=2000,
         tie_embeddings=False,
+        fast_init=True,
     ),
     eval: EvalArgs = EvalArgs(interval=1000, max_iters=100),
     devices: Union[int, str] = "auto",
     tokenizer_dir: Optional[Path] = None,
-    logger_name: Literal["wandb", "tensorboard", "csv"] = "tensorboard",
+    logger_name: Literal["wandb", "tensorboard", "csv"] = "csv",
     seed: int = 42,
+    replication_size: int = None,
+    sharding_size: int = None,
 ):
     """Pretrain a model.
 
@@ -90,6 +108,8 @@ def setup(
             module require this.
         logger_name: The name of the logger to send metrics to.
         seed: The random seed to use for reproducibility.
+        replication_size: The number of model replicas. Only relevant when using FSDP.
+        sharding_size: The number of devices to shard per FSDP group. Only relevant when using FSDP.
     """
     hparams = capture_hparams()
     data = TinyLlama() if data is None else data
@@ -110,7 +130,10 @@ def setup(
     )
 
     if devices > 1:
-        strategy = FSDPStrategy(auto_wrap_policy={Block}, state_dict_type="full", sharding_strategy="HYBRID_SHARD")
+        if isinstance(replication_size, int) ^ isinstance(sharding_size, int):
+            raise ValueError("Either `replication_size` and `sharding_size` must both be set or left undefined")
+        device_mesh = (replication_size, sharding_size) if replication_size else None
+        strategy = FSDPStrategy(auto_wrap_policy={Block}, state_dict_type="full", sharding_strategy="HYBRID_SHARD", device_mesh=device_mesh)
     else:
         strategy = "auto"
     fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=[logger])
@@ -147,71 +170,109 @@ def main(
     out_dir: Path,
     tokenizer_dir: Optional[Path],
     tokenizer: Optional[Tokenizer],
+    use_pt_profiler: bool,
+    pt_profiler_wait: int,
+    pt_profiler_warmup: int,
+    pt_profiler_active: int,
+    pt_profiler_repeat: int,
     train: TrainArgs,
     eval: EvalArgs,
 ) -> None:
-    validate_args(train, eval, initial_checkpoint_dir, resume)
+    if use_pt_profiler:
+        cm = nullcontext()
+    else:
+        cm = torch.autograd.profiler.emit_nvtx()
+    with cm:
+        validate_args(train, eval, initial_checkpoint_dir, resume)
 
-    if fabric.global_rank == 0:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        if fabric.global_rank == 0:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        tprofiler_out_dir = out_dir / "tprofiler"
+        execution_trace_out_dir = out_dir / "execution_trace"
+        execution_trace_out_dir.mkdir(parents=True, exist_ok=True)
 
-    fabric.seed_everything(seed)  # same seed for every process to init model (FSDP)
+        fabric.seed_everything(seed)  # same seed for every process to init model (FSDP)
 
-    t0 = time.perf_counter()
-    with fabric.init_module(empty_init=True):
-        model = GPT(config)
+        if use_pt_profiler:
+            prof = tprofiler.profile(
+                schedule=tprofiler.schedule(
+                    wait=pt_profiler_wait,
+                    warmup=pt_profiler_warmup,
+                    active=pt_profiler_active,
+                    repeat=pt_profiler_repeat,
+                ),
+                on_trace_ready=tprofiler.tensorboard_trace_handler(tprofiler_out_dir),
+                record_shapes=True,
+                with_stack=True,
+                activities=[tprofiler.ProfilerActivity.CPU, tprofiler.ProfilerActivity.CUDA],
+                execution_trace_observer=(
+                    tprofiler.ExecutionTraceObserver().register_callback(f"{execution_trace_out_dir}/execution_trace_rank_{trainer.global_rank}.json")
+                ),
+            )
+            prof.start()
+        else:
+            prof = None
 
-    initialize_weights(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
 
-    if train.tie_embeddings:
-        model.transformer.wte.weight = model.lm_head.weight
-    if train.max_seq_length:
-        model.max_seq_length = train.max_seq_length
+        t0 = time.perf_counter()
+        with fabric.init_module(empty_init=True):
+            model = GPT(config)
 
-    fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
-    fabric.print(f"Total parameters: {num_parameters(model):,}")
+        # TODO(crankshaw): Add fast_init support
+        initialize_weights(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
 
-    model = torch.compile(model)
-    model = fabric.setup(model)
+        if train.tie_embeddings:
+            model.transformer.wte.weight = model.lm_head.weight
+        if train.max_seq_length:
+            model.max_seq_length = train.max_seq_length
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=train.learning_rate,
-        weight_decay=train.weight_decay,
-        betas=(train.beta1, train.beta2),
-        fused=fabric.device.type == "cuda",
-    )
-    optimizer = fabric.setup_optimizers(optimizer)
+        fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
+        fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    train_dataloader, val_dataloader = get_dataloaders(fabric, data, tokenizer, train, model.max_seq_length)
-    train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
+        model = torch.compile(model)
+        model = fabric.setup(model)
 
-    if initial_checkpoint_dir:
-        fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=train.learning_rate,
+            weight_decay=train.weight_decay,
+            betas=(train.beta1, train.beta2),
+            fused=fabric.device.type == "cuda",
+        )
+        optimizer = fabric.setup_optimizers(optimizer)
 
-    state = {
-        "model": model,
-        "optimizer": optimizer,
-        "train_dataloader": train_dataloader,
-        "iter_num": 0,
-        "step_count": 0,
-    }
+        train_dataloader, val_dataloader = get_dataloaders(fabric, data, tokenizer, train, model.max_seq_length)
+        train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
 
-    if resume is True:
-        resume = max(out_dir.rglob("step-*/*.pth"), key=(lambda p: int(p.parent.name.split("-")[1])))
-    if resume:
-        fabric.print(f"Resuming training from {resume}")
-        fabric.load(resume, state)
+        if initial_checkpoint_dir:
+            fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model)
 
-    train_time = time.perf_counter()
-    fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, train, eval)
+        state = {
+            "model": model,
+            "optimizer": optimizer,
+            "train_dataloader": train_dataloader,
+            "iter_num": 0,
+            "step_count": 0,
+        }
 
-    # Save final checkpoint
-    save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
+        if resume is True:
+            resume = max(out_dir.rglob("step-*/*.pth"), key=(lambda p: int(p.parent.name.split("-")[1])))
+        if resume:
+            fabric.print(f"Resuming training from {resume}")
+            fabric.load(resume, state)
 
-    fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
-    if fabric.device.type == "cuda":
-        fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
+        train_time = time.perf_counter()
+        fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, train, eval, prof)
+
+        if prof:
+            prof.stop()
+
+        # Save final checkpoint
+        save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
+
+        fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
+        if fabric.device.type == "cuda":
+            fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
 
 
 def fit(
@@ -224,9 +285,13 @@ def fit(
     tokenizer_dir: Optional[Path],
     train: TrainArgs,
     eval: EvalArgs,
+    prof: tprofiler.profile,
 ) -> None:
     model = state["model"]
     optimizer = state["optimizer"]
+
+    # TODO(crankshaw)
+    nsys_profile_step_multiple = 5
 
     if eval.initial_validation:
         val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
@@ -262,85 +327,102 @@ def fit(
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
     for train_data in train_iterator:
-        if state["iter_num"] >= max_iters:
-            break
+        with nvtx.annotate(color="green", message="training_step"):
+            if state["iter_num"] >= max_iters:
+                break
 
-        # determine and set the learning rate for this iteration
-        lr = get_lr(train.learning_rate, state["iter_num"], warmup_iters, max_iters, train.min_lr)
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
+            # determine and set the learning rate for this iteration
+            lr = get_lr(train.learning_rate, state["iter_num"], warmup_iters, max_iters, train.min_lr)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
 
-        state["iter_num"] += 1
-        iter_t0 = time.perf_counter()
+            state["iter_num"] += 1
+            is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
+            if state["step_count"] > 0 and state["step_count"] % nsys_profile_step_multiple == 0 and state["iter_num"] % train.gradient_accumulation_iters(devices) == 1:
+              fabric.print(f"Starting Nsys profiling")
+              torch.cuda.cudart().cudaProfilerStart()
+            iter_t0 = time.perf_counter()
 
-        input_ids = train_data[:, 0 : model.max_seq_length].contiguous().long()
-        targets = train_data[:, 1 : (model.max_seq_length + 1)].contiguous().long()
+            input_ids = train_data[:, 0 : model.max_seq_length].contiguous().long()
+            targets = train_data[:, 1 : (model.max_seq_length + 1)].contiguous().long()
 
-        is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
-        with fabric.no_backward_sync(model, enabled=is_accumulating):
-            logits = model(input_ids)
-            loss = chunked_cross_entropy(logits, targets)
-            fabric.backward(loss / train.gradient_accumulation_iters(devices))
+            with fabric.no_backward_sync(model, enabled=is_accumulating):
+                with nvtx.annotate(color="blue", message="forward_step"):
+                    logits = model(input_ids)
+                    loss = chunked_cross_entropy(logits, targets)
+                with nvtx.annotate(color="red", message="backward_step"):
+                    fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
-        running_loss.update(loss.detach())
+            running_loss.update(loss.detach())
 
-        if not is_accumulating:
-            fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
-            optimizer.step()
-            optimizer.zero_grad()
-            state["step_count"] += 1
+            if not is_accumulating:
+                fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
+                with nvtx.annotate(color="yellow", message="optimizer_step"):
+                    optimizer.step()
+                optimizer.zero_grad()
 
-        if state["iter_num"] % log_iter_interval == 0:
-            loss = running_loss.compute().item()  # expensive device-to-host synchronization
-            t1 = time.perf_counter()
-            throughput.update(
-                time=(t1 - total_t0),
-                flops=(measured_flops * log_iter_interval),
-                batches=state["iter_num"],
-                samples=(state["iter_num"] * train.micro_batch_size),
-                lengths=(state["iter_num"] * train.micro_batch_size * model.max_seq_length),
-            )
-            metrics = {
-                "loss": loss,
-                "iter": state["iter_num"],
-                "step": state["step_count"],
-                "epoch": train_iterator.epoch,
-                "iter_time": t1 - iter_t0,
-                "remaining_time": (
-                    (t1 - total_t0) / (state["iter_num"] - initial_iter) * (max_iters - state["iter_num"])
-                ),
-                "tokens": state["iter_num"] * train.micro_batch_size * model.max_seq_length,
-                "total_tokens": (state["iter_num"] * train.micro_batch_size * model.max_seq_length * fabric.world_size),
-                "learning_rate": lr,
-            }
-            if isinstance(val_loss, float):
-                val_loss = f"{val_loss:.3f}"
-            fabric.print(
-                f"Epoch {metrics['epoch']+1} | iter {metrics['iter']} step {metrics['step']} |"
-                f" loss train: {metrics['loss']:.3f},"
-                f" val: {val_loss} |"
-                f" iter time: {metrics['iter_time'] * 1000:.2f} ms"
-                f"{' (step)' if not is_accumulating else ''}"
-                f" remaining time: {timedelta(seconds=int(metrics['remaining_time']))!s}"
-            )
+                if state["step_count"] > 0 and state["step_count"] % nsys_profile_step_multiple == 0 and state["iter_num"] % train.gradient_accumulation_iters(devices) == 1:
+                    fabric.print(f"Starting Nsys profiling")
+                    torch.cuda.cudart().cudaProfilerStop()
 
-            throughput_metrics = throughput.compute()
-            metrics.update(throughput_metrics)
-            fabric.log_dict(metrics, step=state["iter_num"] - 1)
+                state["step_count"] += 1
+                if prof:
+                  prof.step()
 
-        if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
-            t0 = time.perf_counter()
-            val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
-            val_loss = val_loss.item()
-            td = time.perf_counter() - t0
 
-            fabric.print(f"iter {state['iter_num']}: val loss {val_loss:.4f}, val time: {td * 1000:.2f} ms")
-            metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
-            fabric.log_dict(metrics, step=state["iter_num"] - 1)
-            fabric.barrier()
+            if state["iter_num"] % log_iter_interval == 0:
+                loss = running_loss.compute().item()  # expensive device-to-host synchronization
+                t1 = time.perf_counter()
+                throughput.update(
+                    time=(t1 - total_t0),
+                    flops=(measured_flops * log_iter_interval),
+                    batches=state["iter_num"],
+                    samples=(state["iter_num"] * train.micro_batch_size),
+                    lengths=(state["iter_num"] * train.micro_batch_size * model.max_seq_length),
+                )
+                metrics = {
+                    "loss": loss,
+                    "iter": state["iter_num"],
+                    "step": state["step_count"],
+                    "epoch": train_iterator.epoch,
+                    "iter_time": t1 - iter_t0,
+                    "remaining_time": (
+                        (t1 - total_t0) / (state["iter_num"] - initial_iter) * (max_iters - state["iter_num"])
+                    ),
+                    "tokens": state["iter_num"] * train.micro_batch_size * model.max_seq_length,
+                    "total_tokens": (state["iter_num"] * train.micro_batch_size * model.max_seq_length * fabric.world_size),
+                    "learning_rate": lr,
+                }
+                if isinstance(val_loss, float):
+                    val_loss = f"{val_loss:.3f}"
+                fabric.print(
+                    f"Epoch {metrics['epoch']+1} | iter {metrics['iter']} step {metrics['step']} |"
+                    f" loss train: {metrics['loss']:.3f},"
+                    f" val: {val_loss} |"
+                    f" iter time: {metrics['iter_time'] * 1000:.2f} ms"
+                    f"{' (step)' if not is_accumulating else ''}"
+                    f" remaining time: {timedelta(seconds=int(metrics['remaining_time']))!s}"
+                )
 
-        if train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0:
-            save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
+                self.print(f"HEARTBEAT: Step {state['step_count']}")
+
+                throughput_metrics = throughput.compute()
+                metrics.update(throughput_metrics)
+                fabric.log_dict(metrics, step=state["iter_num"] - 1)
+
+            if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
+                t0 = time.perf_counter()
+                val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
+                val_loss = val_loss.item()
+                td = time.perf_counter() - t0
+
+                fabric.print(f"iter {state['iter_num']}: val loss {val_loss:.4f}, val time: {td * 1000:.2f} ms")
+                metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
+                fabric.log_dict(metrics, step=state["iter_num"] - 1)
+                fabric.barrier()
+
+            if train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0:
+                save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
 
 
 @torch.no_grad()
