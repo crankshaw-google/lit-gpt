@@ -31,6 +31,8 @@ class TrainArgs:
     """Limits the length of samples"""
     tie_embeddings: Optional[bool] = None
     """Whether to tie the embedding weights with the language modeling head weights"""
+    fast_init: Optional[bool] = None
+    """Whether to init parameters on the GPU"""
 
     # Optimization args
     learning_rate: float = 1e-3

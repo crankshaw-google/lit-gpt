@@ -194,6 +194,17 @@ configs = [
 ]
 
 
+#########################
+# RedRock
+#########################
+
+redrock = [
+    dict(name="redrock-1t", block_size=2048, n_layer=130, n_embd=25600, n_head=160, padding_multiple=128),
+]
+
+configs.extend(redrock)
+
+
 ##########################
 # Stability AI StableCode
 ##########################

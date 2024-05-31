@@ -15,6 +15,7 @@ from litgpt.data.text_files import TextFiles
 from litgpt.data.tinyllama import TinyLlama
 from litgpt.data.tinystories import TinyStories
 from litgpt.data.openwebtext import OpenWebText
+from litgpt.data.redrock_openwebtext import RedRockOpenWebText
 
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "TinyLlama",
     "TinyStories",
     "get_sft_collate_fn",
+    "RedRockOpenWebText",
 ]
