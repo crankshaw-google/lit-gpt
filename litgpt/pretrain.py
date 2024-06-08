@@ -350,13 +350,15 @@ def fit(
             param_group["lr"] = lr
 
         state["iter_num"] += 1
+
+        # is_accumulating is True for all but the last microbatch in each step
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
         capture_profile = state["step_count"] > 0 and state["step_count"] % nsys_profile_step_multiple == 0
 
-        if capture_profile and state["iter_num"] % train.gradient_accumulation_iters(devices) == 1:
+        if capture_profile and (state["iter_num"] - 1) % train.gradient_accumulation_iters(devices) == 0:
             fabric.print(f"Starting Nsys profiling.")
             torch.cuda.profiler.start()
-            
+
         iter_t0 = time.perf_counter()
         input_ids, targets = train_data
 
