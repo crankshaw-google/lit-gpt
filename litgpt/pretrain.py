@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union, Any
 import os
 import sys
+import yaml
 
 import lightning as L
 import torch
@@ -106,7 +107,7 @@ def setup(
             from the latest checkpoint in ``out_dir``.
         data_dir: Directory in which train and val data files are located.
         num_nodes: The number of nodes to train on.
-        use_pt_profiler: Whether to use torch.profiler or nvtx markers. 
+        use_pt_profiler: Whether to use torch.profiler or nvtx markers.
         train: Training-related arguments. See ``litgpt.args.TrainArgs`` for details.
         eval: Evaluation-related arguments. See ``litgpt.args.EvalArgs`` for details.
         devices: How many devices/GPUs to use. Uses all GPUs by default.
@@ -130,7 +131,7 @@ def setup(
     out_dir = init_out_dir(out_dir)
     # in case the dataset requires the Tokenizer
     tokenizer = Tokenizer(tokenizer_dir) if tokenizer_dir is not None else None
- 
+
     logger = choose_logger(
         logger_name, out_dir, name=f"pretrain-{config.name}", resume=resume, log_interval=train.log_interval
     )
@@ -245,7 +246,13 @@ def main(
         fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
         fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-        model = torch.compile(model)
+        torch_compile_file = os.getenv("TORCH_COMPILE_FILE", None)
+        if torch_compile_file:
+            with open(torch_compile_file, "r") as f:
+                torch_kwargs = yaml.safe_load(f)
+        else:
+            torch_kwargs = {}
+        model = torch.compile(model, **torch_kwargs)
         model = fabric.setup(model)
 
         optimizer = torch.optim.AdamW(
@@ -367,7 +374,7 @@ def fit(
                 with nvtx.annotate(color="blue", message=f"forward_step"):
                     logits = model(input_ids)
                     loss = chunked_cross_entropy(logits, targets)
-                
+
                 with nvtx.annotate(color="red", message=f"backward_step"):
                     fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
@@ -377,7 +384,7 @@ def fit(
                 fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
                 with nvtx.annotate(color="yellow", message=f"optimizer_step"):
                     optimizer.step()
-                
+
                 optimizer.zero_grad()
                 state["step_count"] += 1
 
@@ -501,7 +508,7 @@ def initialize_weights(fabric: L.Fabric, model: GPT, n_layer: int, n_embd: int, 
         nn.init.normal_(module.weight, mean=0.0, std=std)
         if getattr(module, "bias", None) is not None:
             nn.init.zeros_(module.bias)
-    
+
     fabric.print(f"Initializing weights with {fast_init=}.", flush=True)
     if fast_init:
         t = time.time()
@@ -535,7 +542,7 @@ def initialize_weights(fabric: L.Fabric, model: GPT, n_layer: int, n_embd: int, 
 
                 # move new layer to cpu & prepare to load into model
                 new_linear.to("cpu")
-                
+
                 if isinstance(module, (LLaMAMLP, CausalSelfAttention)):
                     state_dict[f"{name}.proj.weight"] = new_linear.weight
                     if module.proj.bias is not None:
@@ -560,7 +567,7 @@ def initialize_weights(fabric: L.Fabric, model: GPT, n_layer: int, n_embd: int, 
                 # move new layer to cpu & prepare to load into model
                 new_embedding.to("cpu")
                 state_dict[f"{name}.weight"] = new_embedding.weight
- 
+
             # load new layer's weights & biases into model
             model.load_state_dict(state_dict, strict=False, assign=True)
     else:
@@ -618,3 +625,4 @@ if __name__ == "__main__":
     from jsonargparse import CLI
 
     CLI(setup)
+
