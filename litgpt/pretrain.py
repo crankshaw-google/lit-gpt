@@ -46,10 +46,11 @@ from litgpt.utils import (
 )
 
 mp.set_start_method("spawn", force=True)
+monitor = os.getenv("MONITOR_COLLECTIVES", "False").lower() == "true"
 try:
-    import utilities.monitor_collectives
-
-    utilities.monitor_collectives.shunt_torch_communication()
+    if monitor:
+        import utilities.monitor_collectives
+        utilities.monitor_collectives.shunt_torch_communication()
 except ModuleNotFoundError as e:
     print(e)
     print("Monitor collectives library not found. Collectives will not be monitored..")
